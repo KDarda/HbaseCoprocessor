@@ -1,12 +1,35 @@
 <configuration>
     <table>
-        <name>your_table_name</name>
+        <name>student</name>
         <family>
-            <name>your_column_family</name>
+            <name>info</name>
             <Qualifier>
-                <name>your_column_name</name>
+                <name>name</name>
                 <url>http://example.com</url>
-                <pid>123</pid>
+                <pid>111111</pid>
+            </Qualifier>
+            <Qualifier>
+                <name>age</name>
+                <url>http://example.com</url>
+                <pid>2222222</pid>
+            </Qualifier>
+            <Qualifier>
+                <name>home</name>
+                <url>http://example.com</url>
+                <pid>333333</pid>
+            </Qualifier>
+        </family>
+        <family>
+            <name>work</name>
+            <Qualifier>
+                <name>number</name>
+                <url>http://example.com</url>
+                <pid>111111</pid>
+            </Qualifier>
+            <Qualifier>
+                <name>phone</name>
+                <url>http://example.com</url>
+                <pid>222222</pid>
             </Qualifier>
         </family>
     </table>
