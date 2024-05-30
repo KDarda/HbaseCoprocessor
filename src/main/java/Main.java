@@ -1,5 +1,3 @@
-import org.bouncycastle.crypto.InvalidCipherTextException;
-import org.bouncycastle.crypto.params.ParametersWithIV;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import javax.xml.parsers.DocumentBuilderFactory;
@@ -16,6 +14,8 @@ import org.bouncycastle.crypto.params.KeyParameter;
 import org.bouncycastle.crypto.modes.CBCBlockCipher;
 import org.bouncycastle.crypto.paddings.PaddedBufferedBlockCipher;
 import org.bouncycastle.crypto.paddings.PKCS7Padding;
+import org.bouncycastle.crypto.InvalidCipherTextException;
+import org.bouncycastle.crypto.params.ParametersWithIV;
 
 
 public class Main {
@@ -96,6 +96,7 @@ public class Main {
         } catch (Exception ignored) {
         }
 
+        // 生成密钥
         byte[] key = new byte[16]; // SM4密钥长度为16字节
         SecureRandom random = new SecureRandom();
         random.nextBytes(key);
@@ -107,30 +108,30 @@ public class Main {
         byte[] iv = new byte[16]; // SM4初始化向量长度为16字节
         random.nextBytes(iv);
 
-//        // 加密
-//        cipher.init(true, new ParametersWithIV(keyParameter, iv));
-//        byte[] plaintext = "Hello, World!".getBytes();
-//        byte[] ciphertext = new byte[cipher.getOutputSize(plaintext.length)];
-//        int len = cipher.processBytes(plaintext, 0, plaintext.length, ciphertext, 0);
-//        try {
-//            cipher.doFinal(ciphertext, len);
-//        } catch (InvalidCipherTextException e) {
-//            throw new RuntimeException(e);
-//        }
-//
-//        System.out.println("Ciphertext: " + bytesToHex(ciphertext));
-//
-//        // 解密
-//        cipher.init(false, new ParametersWithIV(keyParameter, iv));
-//        byte[] decryptedText = new byte[cipher.getOutputSize(ciphertext.length)];
-//        len = cipher.processBytes(ciphertext, 0, ciphertext.length, decryptedText, 0);
-//        try {
-//            cipher.doFinal(decryptedText, len);
-//        } catch (InvalidCipherTextException e) {
-//            throw new RuntimeException(e);
-//        }
-//
-//        System.out.println("Decrypted Text: " + new String(decryptedText).trim());
+        // 加密
+        cipher.init(true, new ParametersWithIV(keyParameter, iv));
+        byte[] plaintext = "Hello, World!".getBytes();
+        byte[] ciphertext = new byte[cipher.getOutputSize(plaintext.length)];
+        int len = cipher.processBytes(plaintext, 0, plaintext.length, ciphertext, 0);
+        try {
+            cipher.doFinal(ciphertext, len);
+        } catch (InvalidCipherTextException e) {
+            throw new RuntimeException(e);
+        }
+
+        System.out.println("Ciphertext: " + bytesToHex(ciphertext));
+
+        // 解密
+        cipher.init(false, new ParametersWithIV(keyParameter, iv));
+        byte[] decryptedText = new byte[cipher.getOutputSize(ciphertext.length)];
+        len = cipher.processBytes(ciphertext, 0, ciphertext.length, decryptedText, 0);
+        try {
+            cipher.doFinal(decryptedText, len);
+        } catch (InvalidCipherTextException e) {
+            throw new RuntimeException(e);
+        }
+
+        System.out.println("Decrypted Text: " + new String(decryptedText).trim());
 
     }
 
