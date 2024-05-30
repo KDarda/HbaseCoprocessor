@@ -1,7 +1,11 @@
 package com.hbase125.coprocessor;
 
 import java.io.IOException;
-import java.util.*;
+import java.util.Arrays;
+import java.util.List;
+import java.util.Map;
+import java.util.NavigableMap;
+import java.util.ArrayList;
 
 import org.apache.hadoop.hbase.Cell;
 import org.apache.hadoop.hbase.CellUtil;
@@ -122,30 +126,6 @@ public class MyCoprocessor extends BaseRegionObserver {
         results.addAll(tempResults);
 
         logger.info("postGetOp stop");
-
-//        // 创建一个新的 InternalScanner 用于扫描原始的 Get 结果
-//        InternalScanner scanner = e.getEnvironment().getRegion().getScanner(new Scan(get));
-//        List<Cell> tempResults = new ArrayList<>();
-//
-//        // 将扫描到的结果保存到临时列表中
-//        scanner.next(tempResults);
-//
-//        if(Bytes.equals(get.getRow(), Bytes.toBytes("1010"))){
-//
-//            // 遍历临时结果列表，并移除列族 info 中列名 name 的值
-//            tempResults.removeIf(cell -> Bytes.equals(CellUtil.cloneFamily(cell), Bytes.toBytes("info"))
-//                    && Bytes.equals(CellUtil.cloneQualifier(cell), Bytes.toBytes("name")));
-//
-//            // 将修改后的结果添加到原结果列表中
-//            results.clear();
-//            results.addAll(tempResults);
-//
-//            // 新增新的列族 info 中列名 name 的值
-//            KeyValue kv = new KeyValue(get.getRow(),Bytes.toBytes("info"),Bytes.toBytes("name"),Bytes.toBytes("Jri"));
-//            results.add(kv);
-//
-//            logger.info("Modified value");
-//        }
 
     }
 
