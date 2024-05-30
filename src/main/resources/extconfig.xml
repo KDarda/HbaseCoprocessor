@@ -1,0 +1,13 @@
+<configuration>
+    <table>
+        <name>your_table_name</name>
+        <family>
+            <name>your_column_family</name>
+            <Qualifier>
+                <name>your_column_name</name>
+                <url>http://example.com</url>
+                <pid>123</pid>
+            </Qualifier>
+        </family>
+    </table>
+</configuration>
