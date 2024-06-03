@@ -1,7 +1,6 @@
 package com.hbase125.coprocessor;
 
 import java.io.IOException;
-import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.NavigableMap;
@@ -32,7 +31,6 @@ import org.bouncycastle.crypto.paddings.PaddedBufferedBlockCipher;
 import org.bouncycastle.crypto.paddings.PKCS7Padding;
 import org.bouncycastle.crypto.params.ParametersWithIV;
 
-import com.hbase125.coprocessor.MyConfigure;
 
 public class MyCoprocessor extends BaseRegionObserver {
 
@@ -42,21 +40,27 @@ public class MyCoprocessor extends BaseRegionObserver {
 
     @Override
     public void start(CoprocessorEnvironment e) throws IOException {
-        //ReadFile("/home/hbconf/extconfig.xml","table","family","Qualifier");
+        super.start(e);
     }
+
 
     @Override
     public void stop(CoprocessorEnvironment env) throws IOException {
         configure = null;
+        super.stop(env);
     }
+
 
     @Override
     public void prePut(final ObserverContext<RegionCoprocessorEnvironment> e,
                        final Put put, final WALEdit edit, final Durability durability) throws IOException {
         logger.info("prePut start");
-        // 获取当前操作的表名
-        String tableName = e.getEnvironment().getRegion().getRegionInfo().getTable().getNameAsString();
 
+        /*
+        * 获取当前操作的表名,比较是否为配置文件中的表
+        * 不在配置中直接退出，不做处理
+        */
+        String tableName = e.getEnvironment().getRegion().getRegionInfo().getTable().getNameAsString();
         MyConfigure.Table table = null;
         for (MyConfigure.Table t : configure.getConfiguration().getTables()) {
             if (t.getName().equals(tableName)) {
@@ -65,16 +69,19 @@ public class MyCoprocessor extends BaseRegionObserver {
             }
         }
         if (table == null) {
+            logger.info("prePut stop");
             return;
         }
 
-        MyConfigure.Family tableFamily = null;
-        // 获取当前 Put 对象中所有列族及其对应的列
-        NavigableMap<byte[], List<Cell>> familyCellMap = put.getFamilyCellMap();
-        // 遍历所有列族及其对应的列
-        for (Map.Entry<byte[], List<Cell>> entry : familyCellMap.entrySet()) {
-            byte[] family = entry.getKey();  // 获取列族
 
+        /*
+         * 遍历结果集，获取Put操作中所有的列簇
+         */
+        NavigableMap<byte[], List<Cell>> familyCellMap = put.getFamilyCellMap();
+        for (Map.Entry<byte[], List<Cell>> entry : familyCellMap.entrySet()) {
+            byte[] family = entry.getKey();
+
+            MyConfigure.Family tableFamily = null;
             for (MyConfigure.Family f : table.getFamilies()) {
                 if (f.getName().equals(Bytes.toString(family))) {
                     tableFamily = f;
@@ -85,13 +92,15 @@ public class MyCoprocessor extends BaseRegionObserver {
                 continue;
             }
 
-            MyConfigure.Qualifier configQualifier = null;
-            // 获取列族中的所有列
-            List<Cell> cells = entry.getValue();
-            // 遍历列族中的所有列
-            for (Cell cell : cells) {
-                byte[] qualifier = CellUtil.cloneQualifier(cell);  // 获取列名
 
+            /*
+             * 遍历列簇Map，获取列族中的所有列名
+             */
+            List<Cell> cells = entry.getValue();
+            for (Cell cell : cells) {
+                byte[] qualifier = CellUtil.cloneQualifier(cell);
+
+                MyConfigure.Qualifier configQualifier = null;
                 for (MyConfigure.Qualifier q : tableFamily.getQualifiers()) {
                     if (q.getName().equals(Bytes.toString(qualifier))) {
                         configQualifier = q;
@@ -102,32 +111,42 @@ public class MyCoprocessor extends BaseRegionObserver {
                     continue;
                 }
 
-                logger.info("Encrypt start");
-                byte[] value = CellUtil.cloneValue(cell);  // 获取列的值
+
+                /*
+                 * 获取到配置加密列名，调用策略
+                 */
+                byte[] value = CellUtil.cloneValue(cell);
                 String keyHex = "0123456789ABCDEFFEDCBA9876543210";
                 byte[] keyBytes = Hex.decode(keyHex);
                 byte[] ivBytes = "1111111111111111".getBytes();
 
                 try {
+                    logger.info("Encrypt start");
                     byte[] newValue = sm4Encrypt(keyBytes, value, ivBytes);
 
-                    // 创建一个新的 Put 对象，用于保存修改后的值
+
+                    /*
+                     * 加密后处理
+                     * 1 创建一个新的 Put 对象，用于保存修改后的值
+                     * 2 将修改后的值添加到新的 Put 对象中
+                     * 3 清除原来的 Put 对象中的值，替换为修改后的值
+                     */
                     Put newPut = new Put(put.getRow());
-                    // 将修改后的值添加到新的 Put 对象中
                     newPut.addColumn(family, qualifier, newValue);
-                    // 清除原来的 Put 对象中的值，替换为修改后的值
+
                     put.getFamilyCellMap().clear();
                     put.getFamilyCellMap().putAll(newPut.getFamilyCellMap());
-
-                } catch (Exception ignored) {
-                    logger.error("sm4Encrypt failed", ignored);
-                    return;
+                } catch (Exception ex) {
+                    logger.error("sm4Encrypt failed");
+                    throw new RuntimeException(ex);
+                } finally {
+                    logger.info("Encrypt end");
                 }
-                logger.info("Encrypt end");
             }
         }
         logger.info("prePut stop");
     }
+
 
     @Override
     public void postGetOp(final ObserverContext<RegionCoprocessorEnvironment> e,
@@ -135,115 +154,104 @@ public class MyCoprocessor extends BaseRegionObserver {
 
         logger.info("postGetOp start");
 
-        // 获取当前操作的表名
-        String tableName = e.getEnvironment().getRegion().getRegionInfo().getTable().getNameAsString();
-
-        logger.info("postGetOp start for table: {}", tableName);
-
-        // 获取当前系统时间作为时间戳
+        /*
+         * 获取当前系统时间作为时间戳
+         * 用于修改Get数据时，保持时间戳一致
+         */
         long currentTimestamp = System.currentTimeMillis();
 
-        // 遍历结果集
+        /*
+         * 获取当前操作的表名,比较是否为配置文件中的表
+         * 不在配置中直接退出，不做处理
+         */
+        String tableName = e.getEnvironment().getRegion().getRegionInfo().getTable().getNameAsString();
+        MyConfigure.Table table = null;
+        for (MyConfigure.Table t : configure.getConfiguration().getTables()) {
+            if (t.getName().equals(tableName)) {
+                table = t;
+                break;
+            }
+        }
+        if (table == null) {
+            logger.info("postGetOp stop");
+            return;
+        }
+
+
         List<Cell> tempResults = new ArrayList<>();
         for (Cell cell : results) {
-            if (Bytes.equals(CellUtil.cloneFamily(cell), Bytes.toBytes("info")) &&
-                    Bytes.equals(CellUtil.cloneQualifier(cell), Bytes.toBytes("name"))) {
-                // 创建一个新的 KeyValue 对象，替换原值为 new_value
-                KeyValue newKv = new KeyValue(CellUtil.cloneRow(cell),
-                        Bytes.toBytes("info"),
-                        Bytes.toBytes("name"),
-                        currentTimestamp,
-                        Bytes.toBytes("Jri"));
-                tempResults.add(newKv);
-                logger.info("--- Modified value ---");
-            } else {
-                // 保留其他列
+            byte[] family = CellUtil.cloneFamily(cell);
+            byte[] qualifier = CellUtil.cloneQualifier(cell);
+            byte[] value = CellUtil.cloneValue(cell);
+
+            /*
+             * 遍历结果集，获取Get操作中所有的列簇
+             * 比对配置文件
+             * 若列簇或列名不在配置中，则直接保留该列
+             */
+            MyConfigure.Family tableFamily = null;
+            for (MyConfigure.Family f : table.getFamilies()) {
+                if (f.getName().equals(Bytes.toString(family))) {
+                    tableFamily = f;
+                    break;
+                }
+            }
+            if (tableFamily == null) {
                 tempResults.add(cell);
+                continue;
+            }
+
+
+            MyConfigure.Qualifier configQualifier = null;
+            for (MyConfigure.Qualifier q : tableFamily.getQualifiers()) {
+                if (q.getName().equals(Bytes.toString(qualifier))) {
+                    configQualifier = q;
+                    break;
+                }
+            }
+            if (configQualifier == null) {
+                tempResults.add(cell);
+                continue;
+            }
+
+
+            logger.info("decrypt start");
+            String keyHex = "0123456789ABCDEFFEDCBA9876543210";  // 32 hex characters = 16 bytes
+            byte[] keyBytes = Hex.decode(keyHex);
+            byte[] ivBytes = "1111111111111111".getBytes();
+
+
+            try {
+                byte[] newValue = sm4Decrypt(keyBytes, value, ivBytes);
+
+                /*
+                 * 创建一个新的 KeyValue 对象
+                 * 将配置过的加密数据解密处理
+                 */
+                KeyValue newKv = new KeyValue(CellUtil.cloneRow(cell),
+                        family,
+                        qualifier,
+                        currentTimestamp,
+                        newValue);
+                tempResults.add(newKv);
+            } catch (Exception ex) {
+                logger.error("sm4Decrypt failed");
+                throw new RuntimeException(ex);
+            } finally {
+                logger.info("decrypt end");
             }
         }
 
-        // 清空原结果集，并添加修改后的结果
+
+        /*
+         * 清空原结果集，并添加修改后的结果
+         */
         results.clear();
         results.addAll(tempResults);
 
         logger.info("postGetOp stop");
-
     }
 
-
-/*
-    public static void ReadFile(String filepath, String RootKey, String ItemKey, String QualifierKey) {
-
-        File xmlFile = new File(filepath);
-        try {
-            // 创建DocumentBuilderFactory对象
-            DocumentBuilderFactory dbFactory = DocumentBuilderFactory.newInstance();
-            DocumentBuilder dBuilder = dbFactory.newDocumentBuilder();
-
-            // 解析XML文件并获取Document对象
-            Document doc = dBuilder.parse(xmlFile);
-            doc.getDocumentElement().normalize();
-
-            // 获取所有table节点
-            NodeList tableList = doc.getElementsByTagName(RootKey);
-
-            // 遍历每个table节点
-            for (int i = 0; i < tableList.getLength(); i++) {
-                Node tableNode = tableList.item(i);
-
-                if (tableNode.getNodeType() == Node.ELEMENT_NODE) {
-                    Element tableElement = (Element) tableNode;
-
-                    // 获取table节点的name属性值
-                    String tableName = tableElement.getElementsByTagName("name").item(0).getTextContent();
-
-                    logger.info("Table Name: {}", tableName);
-
-                    // 获取所有family节点
-                    NodeList familyList = tableElement.getElementsByTagName(ItemKey);
-
-                    // 遍历每个family节点
-                    for (int j = 0; j < familyList.getLength(); j++) {
-                        Node familyNode = familyList.item(j);
-
-                        if (familyNode.getNodeType() == Node.ELEMENT_NODE) {
-                            Element familyElement = (Element) familyNode;
-
-                            // 获取family节点的name属性值
-                            String familyName = familyElement.getElementsByTagName("name").item(0).getTextContent();
-
-                            logger.info("Family Name: {}", familyName);
-
-                            // 获取所有Qualifier节点
-                            NodeList qualifierList = familyElement.getElementsByTagName(QualifierKey);
-
-                            // 遍历每个Qualifier节点
-                            for (int k = 0; k < qualifierList.getLength(); k++) {
-                                Node qualifierNode = qualifierList.item(k);
-
-                                if (qualifierNode.getNodeType() == Node.ELEMENT_NODE) {
-                                    Element qualifierElement = (Element) qualifierNode;
-
-                                    // 获取Qualifier节点的属性值
-                                    String qualifierName = qualifierElement.getElementsByTagName("name").item(0).getTextContent();
-                                    String qualifierUrl = qualifierElement.getElementsByTagName("url").item(0).getTextContent();
-                                    String qualifierPid = qualifierElement.getElementsByTagName("pid").item(0).getTextContent();
-                                    // 输出读取的属性
-                                    logger.info("Qualifier Name: {}", qualifierName);
-                                    logger.info("Qualifier Url: {}", qualifierUrl);
-                                    logger.info("Qualifier Pid: {}", qualifierPid);
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        } catch (Exception ignored) {
-
-        }
-
-    }
-*/
 
     public static byte[] sm4Encrypt(byte[] key, byte[] data, byte[] iv) throws Exception {
         SM4Engine sm4Engine = new SM4Engine();
@@ -259,6 +267,7 @@ public class MyCoprocessor extends BaseRegionObserver {
         return output;
     }
 
+
     public static byte[] sm4Decrypt(byte[] key, byte[] cipherText, byte[] iv) throws Exception {
         SM4Engine sm4Engine = new SM4Engine();
         CipherParameters params = new ParametersWithIV(new KeyParameter(key), iv);
@@ -270,7 +279,11 @@ public class MyCoprocessor extends BaseRegionObserver {
         byte[] output = new byte[cipher.getOutputSize(cipherText.length)];
         int len = cipher.processBytes(cipherText, 0, cipherText.length, output, 0);
         len += cipher.doFinal(output, len);
-        return output;
+
+        byte[] plainText = new byte[len];
+        System.arraycopy(output, 0, plainText, 0, len);
+
+        return plainText;
     }
 
 }
