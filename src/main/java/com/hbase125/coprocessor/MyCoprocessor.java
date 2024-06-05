@@ -18,7 +18,7 @@ import org.apache.hadoop.hbase.util.Bytes;
 import org.apache.hadoop.hbase.coprocessor.BaseRegionObserver;
 import org.apache.hadoop.hbase.coprocessor.ObserverContext;
 import org.apache.hadoop.hbase.coprocessor.RegionCoprocessorEnvironment;
-import org.bouncycastle.util.encoders.Hex;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -35,6 +35,8 @@ import org.bouncycastle.crypto.params.ParametersWithIV;
 public class MyCoprocessor extends BaseRegionObserver {
 
     private static final Logger logger = LoggerFactory.getLogger(MyCoprocessor.class);
+
+    private static MyPolicy.PolicyInfo staticPolicyInfo = null;
 
     private MyConfigure configure = new MyConfigure("/home/hbconf/extconfig.xml");
 
@@ -114,11 +116,24 @@ public class MyCoprocessor extends BaseRegionObserver {
 
                 /*
                  * 获取到配置加密列名，调用策略
+                 * 依据配置 url 和 pid 生成一个请求
+                 * 获取到策略后，使用策略 IV 和 Key 加密数据
                  */
+                MyPolicy.ASN1Request asn1Request = MyPolicy.createASN1Request(configQualifier.getUrl(), configQualifier.getPid());
+                if(asn1Request == null) {
+                    logger.error("PrePut configQualifier Pid is null or Url is null");
+                    break;
+                }
+
+                MyPolicy.FindPolicy(asn1Request,staticPolicyInfo );
+                if(staticPolicyInfo == null) {
+                    logger.error("PrePut find policy error, PolicyInfo is null");
+                    break;
+                }
+
                 byte[] value = CellUtil.cloneValue(cell);
-                String keyHex = "0123456789ABCDEFFEDCBA9876543210";
-                byte[] keyBytes = Hex.decode(keyHex);
-                byte[] ivBytes = "1111111111111111".getBytes();
+                byte[] keyBytes = staticPolicyInfo.getKey();
+                byte[] ivBytes = staticPolicyInfo.getIv();
 
                 try {
                     logger.info("Encrypt start");
@@ -136,6 +151,7 @@ public class MyCoprocessor extends BaseRegionObserver {
 
                     put.getFamilyCellMap().clear();
                     put.getFamilyCellMap().putAll(newPut.getFamilyCellMap());
+
                 } catch (Exception ex) {
                     logger.error("sm4Encrypt failed");
                     throw new RuntimeException(ex);
@@ -182,7 +198,6 @@ public class MyCoprocessor extends BaseRegionObserver {
         for (Cell cell : results) {
             byte[] family = CellUtil.cloneFamily(cell);
             byte[] qualifier = CellUtil.cloneQualifier(cell);
-            byte[] value = CellUtil.cloneValue(cell);
 
             /*
              * 遍历结果集，获取Get操作中所有的列簇
@@ -215,13 +230,31 @@ public class MyCoprocessor extends BaseRegionObserver {
             }
 
 
-            logger.info("decrypt start");
-            String keyHex = "0123456789ABCDEFFEDCBA9876543210";  // 32 hex characters = 16 bytes
-            byte[] keyBytes = Hex.decode(keyHex);
-            byte[] ivBytes = "1111111111111111".getBytes();
+            /*
+             * 获取到配置加密列名，调用策略
+             * 依据配置 url 和 pid 生成一个请求
+             * 获取到策略后，使用策略 IV 和 Key 加密数据
+             */
+            MyPolicy.ASN1Request asn1Request = MyPolicy.createASN1Request(configQualifier.getUrl(), configQualifier.getPid());
+            if(asn1Request == null) {
+                logger.error("PostGet configQualifier Pid is null or Url is null");
+                break;
+            }
+
+            MyPolicy.FindPolicy(asn1Request,staticPolicyInfo );
+            if(staticPolicyInfo == null) {
+                logger.error("PostGet find policy error, PolicyInfo is null");
+                break;
+            }
+
+
+            byte[] value = CellUtil.cloneValue(cell);
+            byte[] keyBytes = staticPolicyInfo.getKey();
+            byte[] ivBytes = staticPolicyInfo.getIv();
 
 
             try {
+                logger.info("decrypt start");
                 byte[] newValue = sm4Decrypt(keyBytes, value, ivBytes);
 
                 /*
@@ -285,5 +318,7 @@ public class MyCoprocessor extends BaseRegionObserver {
 
         return plainText;
     }
+
+
 
 }

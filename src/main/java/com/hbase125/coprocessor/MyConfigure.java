@@ -16,7 +16,7 @@ public class MyConfigure {
         hbaseConfig = parse(filePath);
     }
 
-    public class Configuration {
+    public static class Configuration {
         private final List<Table> tables;
 
         public Configuration() {
@@ -30,7 +30,7 @@ public class MyConfigure {
         public List<Table> getTables() {return tables;}
     }
 
-    class Table {
+    public static class Table {
         private String name;
         private final List<Family> families;
 
@@ -50,7 +50,7 @@ public class MyConfigure {
         public List<Family> getFamilies() {return families;}
     }
 
-    class Family {
+    public static class Family {
         private String name;
         private final List<Qualifier> qualifiers;
 
@@ -68,7 +68,7 @@ public class MyConfigure {
         public List<Qualifier> getQualifiers() {return qualifiers;}
     }
 
-    class Qualifier {
+    public static class Qualifier {
         private String name;
         private String url;
         private String pid;
@@ -121,7 +121,6 @@ public class MyConfigure {
 
             return configuration;
         } catch (Exception e) {
-            e.printStackTrace();
             return null;
         }
     }

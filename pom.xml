@@ -19,7 +19,7 @@
         <dependency>
             <groupId>org.apache.hbase</groupId>
             <artifactId>hbase-server</artifactId>
-            <version>1.2.5</version>
+            <version>1.2.0</version>
         </dependency>
         <!-- SLF4J dependencies for logging -->
         <dependency>
