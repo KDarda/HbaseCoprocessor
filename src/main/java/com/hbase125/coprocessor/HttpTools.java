@@ -29,13 +29,14 @@ public class HttpTools {
         post.setHeader("Content-type", "application/octet-stream");
 
         try (CloseableHttpResponse response = getHttpClient().execute(post)) {
-            logger.info("Response Code: {}", response.getStatusLine().getStatusCode());
-
             if (response.getStatusLine().getStatusCode() == 200) {
+
                 HttpEntity responseEntity = response.getEntity();
                 if (responseEntity != null) {
                     return EntityUtils.toByteArray(responseEntity);
                 }
+            } else {
+                logger.error("Response Code: {}", response.getStatusLine().getStatusCode());
             }
         } catch (IOException e) {
             throw new RuntimeException(e);

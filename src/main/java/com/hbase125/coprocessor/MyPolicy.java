@@ -148,7 +148,7 @@ public class MyPolicy {
         return new ASN1Request(url, asn1Bytes);
     }
 
-    public static void FindPolicy(ASN1Request asn1Request, PolicyInfo staticPolicyInfo){
+    public static PolicyInfo FindPolicy(ASN1Request asn1Request){
 
         String url = asn1Request.getUrl();
         byte[] asn1Bytes = asn1Request.getAsn1Bytes();
@@ -158,19 +158,18 @@ public class MyPolicy {
         if (responseBytes != null) {
             try {
                 PolicyInfo newPolicyInfo = parsePolicy(responseBytes);
-                if (newPolicyInfo.equals(staticPolicyInfo)) {
-                    logger.info("Received policy is the same as the current one. Keeping the existing policy.");
-                } else {
-                    staticPolicyInfo = newPolicyInfo;
-                    logger.info("Received a new policy. Updating the current policy.");
-                }
+
+                logger.info("Received a new policy. Updating the current policy.");
+                return newPolicyInfo;
+
             } catch (IOException e) {
                 logger.error("Failed to parse the response bytes: {}", e.getMessage());
+                return null;
             }
         } else {
-            staticPolicyInfo = null;
-            logger.info("Failed to receive response from the server.");
+            logger.error("Failed to receive response from the server.");
         }
+        return null;
     }
 
 

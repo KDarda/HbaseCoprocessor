@@ -13,6 +13,8 @@ import org.apache.hadoop.hbase.client.Durability;
 import org.apache.hadoop.hbase.client.Put;
 import org.apache.hadoop.hbase.client.Get;
 import org.apache.hadoop.hbase.KeyValue;
+import org.apache.hadoop.hbase.client.Result;
+import org.apache.hadoop.hbase.regionserver.InternalScanner;
 import org.apache.hadoop.hbase.regionserver.wal.WALEdit;
 import org.apache.hadoop.hbase.util.Bytes;
 import org.apache.hadoop.hbase.coprocessor.BaseRegionObserver;
@@ -38,10 +40,11 @@ public class MyCoprocessor extends BaseRegionObserver {
 
     private static MyPolicy.PolicyInfo staticPolicyInfo = null;
 
-    private MyConfigure configure = new MyConfigure("/home/hbconf/extconfig.xml");
+    private MyConfigure configure = null;
 
     @Override
     public void start(CoprocessorEnvironment e) throws IOException {
+        configure = new MyConfigure("/home/hbconf/extconfig.xml");
         super.start(e);
     }
 
@@ -75,13 +78,22 @@ public class MyCoprocessor extends BaseRegionObserver {
             return;
         }
 
+        // 创建一个新的 Put 对象用于保存修改后的值
+        Put newPut = new Put(put.getRow());
 
-        /*
-         * 遍历结果集，获取Put操作中所有的列簇
-         */
+        //遍历结果集，获取Put操作中所有的列簇
         NavigableMap<byte[], List<Cell>> familyCellMap = put.getFamilyCellMap();
         for (Map.Entry<byte[], List<Cell>> entry : familyCellMap.entrySet()) {
             byte[] family = entry.getKey();
+            List<Cell> cells = entry.getValue();
+
+            /*
+             * 直接将当前 family 的所有数据放入 newPut 中
+             * 仅符合加密条件的数据才会被修改
+             */
+            for (Cell cell : cells) {
+                newPut.add(cell);
+            }
 
             MyConfigure.Family tableFamily = null;
             for (MyConfigure.Family f : table.getFamilies()) {
@@ -94,11 +106,7 @@ public class MyCoprocessor extends BaseRegionObserver {
                 continue;
             }
 
-
-            /*
-             * 遍历列簇Map，获取列族中的所有列名
-             */
-            List<Cell> cells = entry.getValue();
+            // 遍历列簇Map，获取列族中的所有列名
             for (Cell cell : cells) {
                 byte[] qualifier = CellUtil.cloneQualifier(cell);
 
@@ -113,22 +121,17 @@ public class MyCoprocessor extends BaseRegionObserver {
                     continue;
                 }
 
-
-                /*
-                 * 获取到配置加密列名，调用策略
-                 * 依据配置 url 和 pid 生成一个请求
-                 * 获取到策略后，使用策略 IV 和 Key 加密数据
-                 */
+                // 获取到配置加密列名，调用策略
                 MyPolicy.ASN1Request asn1Request = MyPolicy.createASN1Request(configQualifier.getUrl(), configQualifier.getPid());
                 if(asn1Request == null) {
-                    logger.error("PrePut configQualifier Pid is null or Url is null");
-                    break;
+                    logger.error("configQualifier Pid is null or Url is null");
+                    throw new IOException("Failed to create ASN1Request for configQualifier");
                 }
 
-                MyPolicy.FindPolicy(asn1Request,staticPolicyInfo );
+                staticPolicyInfo = MyPolicy.FindPolicy(asn1Request);
                 if(staticPolicyInfo == null) {
-                    logger.error("PrePut find policy error, PolicyInfo is null");
-                    break;
+                    logger.error("find policy error, PolicyInfo is null");
+                    throw new IOException("Failed to find policy for configQualifier");
                 }
 
                 byte[] value = CellUtil.cloneValue(cell);
@@ -136,30 +139,29 @@ public class MyCoprocessor extends BaseRegionObserver {
                 byte[] ivBytes = staticPolicyInfo.getIv();
 
                 try {
-                    logger.info("Encrypt start");
                     byte[] newValue = sm4Encrypt(keyBytes, value, ivBytes);
 
+                    // 删除原始数据并添加加密后的数据
+                    newPut.getFamilyCellMap().get(family).remove(cell);
 
-                    /*
-                     * 加密后处理
-                     * 1 创建一个新的 Put 对象，用于保存修改后的值
-                     * 2 将修改后的值添加到新的 Put 对象中
-                     * 3 清除原来的 Put 对象中的值，替换为修改后的值
-                     */
-                    Put newPut = new Put(put.getRow());
-                    newPut.addColumn(family, qualifier, newValue);
+                    KeyValue newKv = new KeyValue(CellUtil.cloneRow(cell),
+                            family,
+                            qualifier,
+                            cell.getTimestamp(),
+                            newValue);
 
-                    put.getFamilyCellMap().clear();
-                    put.getFamilyCellMap().putAll(newPut.getFamilyCellMap());
+                    newPut.add(newKv);
 
                 } catch (Exception ex) {
                     logger.error("sm4Encrypt failed");
-                    throw new RuntimeException(ex);
-                } finally {
-                    logger.info("Encrypt end");
+                    throw new IOException("Encryption failed", ex);
                 }
             }
         }
+        // 清除原来的 Put 对象中的值，替换为修改后的值
+        put.getFamilyCellMap().clear();
+        put.getFamilyCellMap().putAll(newPut.getFamilyCellMap());
+
         logger.info("prePut stop");
     }
 
@@ -170,10 +172,7 @@ public class MyCoprocessor extends BaseRegionObserver {
 
         logger.info("postGetOp start");
 
-        /*
-         * 获取当前系统时间作为时间戳
-         * 用于修改Get数据时，保持时间戳一致
-         */
+        // 获取当前系统时间作为时间戳
         long currentTimestamp = System.currentTimeMillis();
 
         /*
@@ -193,17 +192,16 @@ public class MyCoprocessor extends BaseRegionObserver {
             return;
         }
 
-
+        // 创建一个新的 Cell 用于保存修改后的值
         List<Cell> tempResults = new ArrayList<>();
+
         for (Cell cell : results) {
             byte[] family = CellUtil.cloneFamily(cell);
             byte[] qualifier = CellUtil.cloneQualifier(cell);
 
-            /*
-             * 遍历结果集，获取Get操作中所有的列簇
-             * 比对配置文件
-             * 若列簇或列名不在配置中，则直接保留该列
-             */
+            // 不符合加密规则会保留该Cell
+            tempResults.add(cell);
+
             MyConfigure.Family tableFamily = null;
             for (MyConfigure.Family f : table.getFamilies()) {
                 if (f.getName().equals(Bytes.toString(family))) {
@@ -212,10 +210,8 @@ public class MyCoprocessor extends BaseRegionObserver {
                 }
             }
             if (tableFamily == null) {
-                tempResults.add(cell);
                 continue;
             }
-
 
             MyConfigure.Qualifier configQualifier = null;
             for (MyConfigure.Qualifier q : tableFamily.getQualifiers()) {
@@ -225,64 +221,167 @@ public class MyCoprocessor extends BaseRegionObserver {
                 }
             }
             if (configQualifier == null) {
-                tempResults.add(cell);
                 continue;
             }
 
-
-            /*
-             * 获取到配置加密列名，调用策略
-             * 依据配置 url 和 pid 生成一个请求
-             * 获取到策略后，使用策略 IV 和 Key 加密数据
-             */
+            // 获取到配置加密列名，调用策略
             MyPolicy.ASN1Request asn1Request = MyPolicy.createASN1Request(configQualifier.getUrl(), configQualifier.getPid());
             if(asn1Request == null) {
-                logger.error("PostGet configQualifier Pid is null or Url is null");
-                break;
+                logger.error("configQualifier Pid is null or Url is null");
+                throw new IOException("Failed to create ASN1Request for configQualifier");
             }
 
-            MyPolicy.FindPolicy(asn1Request,staticPolicyInfo );
+            staticPolicyInfo = MyPolicy.FindPolicy(asn1Request);
             if(staticPolicyInfo == null) {
-                logger.error("PostGet find policy error, PolicyInfo is null");
-                break;
+                logger.error("find policy error, PolicyInfo is null");
+                throw new IOException("Failed to find policy for configQualifier");
             }
-
 
             byte[] value = CellUtil.cloneValue(cell);
             byte[] keyBytes = staticPolicyInfo.getKey();
             byte[] ivBytes = staticPolicyInfo.getIv();
 
-
             try {
-                logger.info("decrypt start");
                 byte[] newValue = sm4Decrypt(keyBytes, value, ivBytes);
 
-                /*
-                 * 创建一个新的 KeyValue 对象
-                 * 将配置过的加密数据解密处理
-                 */
+                // 创建一个新的 KeyValue 对象，将配置过的加密数据解密处理，替换
+                tempResults.remove(tempResults.size() - 1);
+
                 KeyValue newKv = new KeyValue(CellUtil.cloneRow(cell),
                         family,
                         qualifier,
                         currentTimestamp,
                         newValue);
+
                 tempResults.add(newKv);
+
             } catch (Exception ex) {
                 logger.error("sm4Decrypt failed");
-                throw new RuntimeException(ex);
-            } finally {
-                logger.info("decrypt end");
+                throw new IOException("Decryption failed", ex);
             }
         }
-
-
-        /*
-         * 清空原结果集，并添加修改后的结果
-         */
+        // 清空原结果集，添加修改后的结果
         results.clear();
         results.addAll(tempResults);
 
         logger.info("postGetOp stop");
+    }
+
+
+    public boolean postScannerNext(ObserverContext<RegionCoprocessorEnvironment> e,
+                                   InternalScanner s,
+                                   List<Result> results,
+                                   int limit, boolean hasMore) throws IOException {
+
+        logger.info("postScannerNext start");
+
+        // 获取当前系统时间作为时间戳
+        long currentTimestamp = System.currentTimeMillis();
+
+        /*
+         * 获取当前操作的表名,比较是否为配置文件中的表
+         * 不在配置中直接退出，不做处理
+         */
+        String tableName = e.getEnvironment().getRegion().getRegionInfo().getTable().getNameAsString();
+        MyConfigure.Table table = null;
+        for (MyConfigure.Table t : configure.getConfiguration().getTables()) {
+            if (t.getName().equals(tableName)) {
+                table = t;
+                break;
+            }
+        }
+        if (table == null) {
+            logger.info("postScannerNext stop");
+            return hasMore;
+        }
+
+        // 创建一个新的 Result 用于保存修改后的值
+        List<Result> newResults = new ArrayList<>();
+
+        /*
+         * 和postGet方法类似,但scan有多个result数据集
+         * 一次scan等同于多个Get,在代码中拆分为多次Get的处理逻辑
+         */
+        for(Result result : results) {
+            List<Cell> cells = result.listCells();
+
+            // 创建一个新的 Cell 用于保存修改后的值
+            List<Cell> tempResults = new ArrayList<>();
+
+            for (Cell cell : cells) {
+                byte[] family = CellUtil.cloneFamily(cell);
+                byte[] qualifier = CellUtil.cloneQualifier(cell);
+
+                //不符合加密规则会保留该Cell
+                tempResults.add(cell);
+
+                MyConfigure.Family tableFamily = null;
+                for (MyConfigure.Family f : table.getFamilies()) {
+                    if (f.getName().equals(Bytes.toString(family))) {
+                        tableFamily = f;
+                        break;
+                    }
+                }
+                if (tableFamily == null) {
+                    continue;
+                }
+
+                MyConfigure.Qualifier configQualifier = null;
+                for (MyConfigure.Qualifier q : tableFamily.getQualifiers()) {
+                    if (q.getName().equals(Bytes.toString(qualifier))) {
+                        configQualifier = q;
+                        break;
+                    }
+                }
+                if (configQualifier == null) {
+                    continue;
+                }
+
+                // 获取到配置加密列名，调用策略
+                MyPolicy.ASN1Request asn1Request = MyPolicy.createASN1Request(configQualifier.getUrl(), configQualifier.getPid());
+                if(asn1Request == null) {
+                    logger.error("configQualifier Pid is null or Url is null");
+                    throw new IOException("Failed to create ASN1Request for configQualifier");
+                }
+
+                staticPolicyInfo = MyPolicy.FindPolicy(asn1Request);
+                if(staticPolicyInfo == null) {
+                    logger.error("find policy error, PolicyInfo is null");
+                    throw new IOException("Failed to find policy for configQualifier");
+                }
+
+                byte[] value = CellUtil.cloneValue(cell);
+                byte[] keyBytes = staticPolicyInfo.getKey();
+                byte[] ivBytes = staticPolicyInfo.getIv();
+
+                try {
+                    byte[] newValue = sm4Decrypt(keyBytes, value, ivBytes);
+
+                    // 创建一个新的 KeyValue 对象，将配置过的加密数据解密处理，替换
+                    tempResults.remove(tempResults.size() - 1);
+
+                    KeyValue newKv = new KeyValue(CellUtil.cloneRow(cell),
+                            family,
+                            qualifier,
+                            currentTimestamp,
+                            newValue);
+
+                    tempResults.add(newKv);
+
+                } catch (Exception ex) {
+                    logger.error("sm4Decrypt failed");
+                    throw new IOException("Decryption failed", ex);
+                }
+            }
+            // 添加到scan结果集，每次对Get修改后的结果
+            newResults.add(Result.create(tempResults));
+        }
+        // 最后清理所有Result 将新的scan结果集插入
+        results.clear();
+        results.addAll(newResults);
+
+        logger.info("postScannerNext stop");
+        return hasMore;
     }
 
 
